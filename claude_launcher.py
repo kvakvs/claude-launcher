@@ -31,6 +31,10 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 APP_NAME = "ClaudeLauncher"
+# Must match the shortcut's AppUserModelID (make_shortcut.py) so a pinned taskbar
+# button and the running window share one taskbar entry.
+APP_USER_MODEL_ID = "ClaudeLauncher.App"
+ICON_PATH = Path(__file__).resolve().with_name("claude_launcher.ico")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # Variables that would make the spawned VS Code misbehave if the launcher itself
@@ -343,6 +347,8 @@ class App(tk.Tk):
         super().__init__()
         self.title("Claude Launcher")
         self.minsize(580, 360)
+        if sys.platform == "win32" and ICON_PATH.exists():
+            self.iconbitmap(default=str(ICON_PATH))
         self.cfg = Config(data_root() / "config.json")
 
         root = ttk.Frame(self, padding=10)
@@ -569,8 +575,12 @@ APPS = {
 
 def main() -> None:
     if sys.platform == "win32":
+        import ctypes
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+        except (AttributeError, OSError):
+            pass
         try:  # crisp text on high-DPI screens
-            import ctypes
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except (AttributeError, OSError):
             pass

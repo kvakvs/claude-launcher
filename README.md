@@ -7,6 +7,21 @@ Claude Code extension signed in to different Claude accounts — side by side.
 python claude_launcher.py      # or double-click ClaudeLauncher.pyw (no console)
 ```
 
+## Shortcut / pinning
+
+`Claude Launcher.lnk` in this folder starts the app without a console window. To pin it,
+right-click the shortcut and choose **Pin to Start** or **Pin to taskbar**, or drag it
+onto the taskbar. To rebuild it, for example after moving the folder or changing Python:
+
+```
+python make_shortcut.py                # recreate the shortcut (+ icon if missing)
+python make_shortcut.py --start-menu   # also add it to Start menu > All apps
+python make_shortcut.py --icon         # regenerate the icon (needs Pillow)
+```
+
+The shortcut and the app share an AppUserModelID (`ClaudeLauncher.App`), so the pinned
+button and the open window use one taskbar entry with the launcher's icon.
+
 ## How it works
 
 Each account gets its own profile directory under `%APPDATA%\ClaudeLauncher\profiles\<id>\`:
