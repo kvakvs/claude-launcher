@@ -48,6 +48,10 @@ each account its own VS Code instance, so several accounts can run at once.
   if the signed-in email differs from the one you entered.
 - VS Code is found automatically once, from the usual install locations or `code` on PATH, and the path is cached in
   `%APPDATA%\ClaudeLauncher\config.json`. Use **Change…** to override it.
+- **Run as administrator** (off by default) starts VS Code or Claude Desktop elevated,
+  after a UAC prompt. An elevated process doesn't inherit the launcher's environment,
+  so the launcher re-runs itself elevated, sets `CLAUDE_CONFIG_DIR`, and starts the app from there.
+  If that account's app is already running without elevation, close it first.
 - **Remove** can either keep or delete the account's profile data. Deleting covers both the VS Code and the Claude Desktop data.
 
 ## Claude Desktop

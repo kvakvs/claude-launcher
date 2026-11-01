@@ -35,6 +35,9 @@ APP_NAME = "ClaudeLauncher"
 # button and the running window share one taskbar entry.
 APP_USER_MODEL_ID = "ClaudeLauncher.App"
 ICON_PATH = Path(__file__).resolve().with_name("claude_launcher.ico")
+# Hidden command-line switch: the elevated copy of the launcher spawns the app.
+ELEVATED_SPAWN_ARG = "--elevated-spawn"
+ELEVATED_COLOR = "#d00000"  # outline + text of the start buttons when elevated
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # Variables that would make the spawned VS Code misbehave if the launcher itself
@@ -243,14 +246,18 @@ def seed_vscode_settings(target_user_dir: Path) -> None:
         shutil.copytree(source / "snippets", target_user_dir / "snippets")
 
 
-def account_env(account: dict) -> dict[str, str]:
-    cdir = claude_dir(account)
-    cdir.mkdir(parents=True, exist_ok=True)
-    env = {
+def clean_env() -> dict[str, str]:
+    return {
         k: v
         for k, v in os.environ.items()
         if k not in STRIPPED_ENV and not k.startswith(STRIPPED_ENV_PREFIXES)
     }
+
+
+def account_env(account: dict) -> dict[str, str]:
+    cdir = claude_dir(account)
+    cdir.mkdir(parents=True, exist_ok=True)
+    env = clean_env()
     env["CLAUDE_CONFIG_DIR"] = str(cdir)
     return env
 
@@ -271,21 +278,51 @@ def spawn_detached(args: list[str], env: dict[str, str]) -> None:
                      stderr=subprocess.DEVNULL, **kwargs)
 
 
-def launch_vscode(vscode_path: str, account: dict) -> None:
+def spawn_elevated(args: list[str], env: dict[str, str]) -> None:
+    """Windows: spawn via an elevated copy of the launcher (shows the UAC prompt).
+
+    An elevated process does not inherit our environment, so the copy is
+    passed the variables that differ from ours and applies them itself.
+    """
+    import ctypes
+
+    overrides = {k: v for k, v in env.items() if os.environ.get(k) != v}
+    exe = Path(sys.executable)
+    if exe.with_name("pythonw.exe").is_file():  # no console window
+        exe = exe.with_name("pythonw.exe")
+    params = subprocess.list2cmdline([str(Path(__file__).resolve()), ELEVATED_SPAWN_ARG,
+                                      json.dumps({"args": args, "env": overrides})])
+    shell_execute = ctypes.windll.shell32.ShellExecuteW
+    shell_execute.restype = ctypes.c_void_p
+    result = shell_execute(None, "runas", str(exe), params, None, 0) or 0
+    if result == 5:  # SE_ERR_ACCESSDENIED: the user declined the UAC prompt
+        return
+    if result <= 32:
+        raise OSError(f"Elevation failed (ShellExecute error {result})")
+
+
+def spawn(args: list[str], env: dict[str, str], elevated: bool = False) -> None:
+    if elevated and sys.platform == "win32":
+        spawn_elevated(args, env)
+    else:
+        spawn_detached(args, env)
+
+
+def launch_vscode(vscode_path: str, account: dict, elevated: bool = False) -> None:
     vdir = vscode_dir(account)
     seed_vscode_settings(vdir / "User")
     args = [vscode_path, "--user-data-dir", str(vdir)]
     folder = account.get("folder")
     if folder:
         args.append(folder)
-    spawn_detached(args, account_env(account))
+    spawn(args, account_env(account), elevated)
 
 
-def launch_desktop(desktop_path: str, account: dict) -> None:
+def launch_desktop(desktop_path: str, account: dict, elevated: bool = False) -> None:
     ddir = desktop_dir(account)
     ddir.mkdir(parents=True, exist_ok=True)
     # Chromium only parses switches in --name=value form.
-    spawn_detached([desktop_path, f"--user-data-dir={ddir}"], account_env(account))
+    spawn([desktop_path, f"--user-data-dir={ddir}"], account_env(account), elevated)
 
 
 # --------------------------------------------------------------------------- GUI
@@ -397,10 +434,24 @@ class App(tk.Tk):
         starts = ttk.Frame(root)
         starts.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(10, 0))
         starts.columnconfigure((0, 1), weight=1, uniform="start")
-        ttk.Button(starts, text="▶  Start VS Code", command=self.start) \
-            .grid(row=0, column=0, sticky="ew", padx=(0, 4), ipady=6)
-        ttk.Button(starts, text="▶  Start Claude Desktop", command=self.start_desktop) \
-            .grid(row=0, column=1, sticky="ew", padx=(4, 0), ipady=6)
+        self.elevated = tk.BooleanVar(value=False)
+        if sys.platform == "win32":
+            ttk.Checkbutton(starts, text="Run as administrator", variable=self.elevated,
+                            command=self._update_start_style) \
+                .grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        style = ttk.Style(self)
+        style.configure("Elevated.TButton", foreground=ELEVATED_COLOR)
+        self.normal_bg = style.lookup("TFrame", "background")
+        # ttk buttons can't draw a colored border, so each sits in a frame whose
+        # background shows as an outline when elevated.
+        self.start_buttons: list[tuple[tk.Frame, ttk.Button]] = []
+        for col, (text, command) in enumerate((("▶  Start VS Code", self.start),
+                                               ("▶  Start Claude Desktop", self.start_desktop))):
+            outline = tk.Frame(starts, background=self.normal_bg)
+            outline.grid(row=1, column=col, sticky="ew", padx=(0, 4) if col == 0 else (4, 0))
+            button = ttk.Button(outline, text=text, command=command)
+            button.pack(fill="x", padx=2, pady=2, ipady=6)
+            self.start_buttons.append((outline, button))
 
         for attr in APPS:
             self.ensure_app(attr, interactive=False)
@@ -413,6 +464,12 @@ class App(tk.Tk):
         # Login state changes while VS Code runs; refresh when user comes back.
         if event.widget is self:
             self.refresh()
+
+    def _update_start_style(self) -> None:
+        elevated = self.elevated.get()
+        for outline, button in self.start_buttons:
+            outline.configure(background=ELEVATED_COLOR if elevated else self.normal_bg)
+            button.configure(style="Elevated.TButton" if elevated else "TButton")
 
     def selected(self) -> dict | None:
         sel = self.tree.selection()
@@ -556,7 +613,7 @@ class App(tk.Tk):
         if not exe:
             return
         try:
-            APPS[attr]["launch"](exe, acc)
+            APPS[attr]["launch"](exe, acc, self.elevated.get())
         except OSError as exc:
             messagebox.showerror(APP_NAME, f"Failed to start {APPS[attr]['label']}:\n{exc}")
             return
@@ -574,6 +631,10 @@ APPS = {
 
 
 def main() -> None:
+    if len(sys.argv) == 3 and sys.argv[1] == ELEVATED_SPAWN_ARG:
+        payload = json.loads(sys.argv[2])
+        spawn_detached(payload["args"], {**clean_env(), **payload["env"]})
+        return
     if sys.platform == "win32":
         import ctypes
         try:
